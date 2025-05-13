@@ -1,7 +1,7 @@
 [general]
 name=HighGround
 description=A QGIS plugin to calculate percentiles in DEMs
-version=1.0
+version=1.1
 qgisMinimumVersion=3.0
 author=Rob Ellis
 email=rob.ellis@jic.ac.uk

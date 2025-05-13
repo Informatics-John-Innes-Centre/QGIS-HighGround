@@ -149,7 +149,7 @@ def proc(raster, vector, output, selected_percentile):
             # Create output feature with ORIGINAL geometry
             new_feature = QgsFeature(output_layer.fields())
             new_feature.setGeometry(original_geom)  # Use original untransformed geometry
-            new_feature.setAttributes(attributes + [percentile])
+            new_feature.setAttributes(attributes + [float(percentile)])
             output_data.addFeature(new_feature)
 
             QgsMessageLog.logMessage(f"Processed {idx + 1}/{vector_layer.featureCount()}", 'HighGround')

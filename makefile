@@ -1,4 +1,4 @@
-all: package
+all: package-dev
 
 package-dev:
 	zip -r QGIS-HighGround.zip src

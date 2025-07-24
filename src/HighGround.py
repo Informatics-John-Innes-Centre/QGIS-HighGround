@@ -35,13 +35,20 @@ class LayerSelectionDialog(QDialog):
         self.vector_combo.addItems(vector_layers)
         self.layout.addWidget(self.vector_combo)
 
-        self.percentile_label = QLabel('Select percentile:')
+        self.percentile_label = QLabel('Select high percentile:')
         self.layout.addWidget(self.percentile_label)
         # Use QSpinBox for integer input between 1 and 99
         self.percentile_selection = QSpinBox()
         self.percentile_selection.setValue(99)
-        self.percentile_selection.setRange(1, 99)  # Set the range from 1 to 99
+        self.percentile_selection.setRange(1, 99)
         self.layout.addWidget(self.percentile_selection)
+
+        self.low_percentile_label = QLabel('Select low percentile:')
+        self.layout.addWidget(self.low_percentile_label)
+        self.low_percentile_selection = QSpinBox()
+        self.low_percentile_selection.setValue(1)
+        self.low_percentile_selection.setRange(1, 99)
+        self.layout.addWidget(self.low_percentile_selection)
 
         self.output_label = QLabel('Choose Output Location:')
         self.layout.addWidget(self.output_label)
@@ -67,7 +74,8 @@ class LayerSelectionDialog(QDialog):
             self.vector_combo.currentText(),
             self.raster_combo.currentText(),
             self.output_file.text().strip(),
-            self.percentile_selection.value()
+            self.percentile_selection.value(),
+            self.low_percentile_selection.value()
         )
 
 
@@ -78,7 +86,7 @@ def get_layer(name):
     return layers[0]
 
 
-def proc(raster, vector, output, selected_percentile):
+def proc(raster, vector, output, selected_percentile, low_percentile):
     QgsMessageLog.logMessage("Begin processing", 'HighGround')
 
     try:
@@ -91,7 +99,10 @@ def proc(raster, vector, output, selected_percentile):
         output_data = output_layer.dataProvider()
 
         # Add fields (original + new)
-        new_fields = vector_layer.fields().toList() + [QgsField(f"pct_{selected_percentile}", QVariant.Double)]
+        new_fields = vector_layer.fields().toList() + [
+            QgsField(f"pct_{selected_percentile}", QVariant.Double),
+            QgsField(f"pct_{low_percentile}", QVariant.Double)
+        ]
         output_data.addAttributes(new_fields)
         output_layer.updateFields()
 
@@ -119,6 +130,7 @@ def proc(raster, vector, output, selected_percentile):
             temp_vector.updateExtents()
 
             percentile = None
+            low_pct = None
             try:
                 # Clip raster
                 params = {
@@ -131,7 +143,7 @@ def proc(raster, vector, output, selected_percentile):
                 }
                 clipped = processing.run("gdal:cliprasterbymasklayer", params)['OUTPUT']
 
-                # Calculate percentile
+                # Calculate percentiles
                 ds = gdal.Open(clipped)
                 band = ds.GetRasterBand(1)
                 data = band.ReadAsArray()
@@ -142,6 +154,7 @@ def proc(raster, vector, output, selected_percentile):
                         data_flat = data_flat[data_flat != nodata]
                     if data_flat.size > 0:
                         percentile = np.percentile(data_flat, selected_percentile)
+                        low_pct = np.percentile(data_flat, low_percentile)
 
             except Exception as e:
                 QgsMessageLog.logMessage(f"Error processing feature {idx}: {str(e)}", 'HighGround')
@@ -149,7 +162,7 @@ def proc(raster, vector, output, selected_percentile):
             # Create output feature with ORIGINAL geometry
             new_feature = QgsFeature(output_layer.fields())
             new_feature.setGeometry(original_geom)  # Use original untransformed geometry
-            new_feature.setAttributes(attributes + [float(percentile)])
+            new_feature.setAttributes(attributes + [float(percentile), float(low_pct)])
             output_data.addFeature(new_feature)
 
             QgsMessageLog.logMessage(f"Processed {idx + 1}/{vector_layer.featureCount()}", 'HighGround')
@@ -212,11 +225,11 @@ class HighGround:
 
         dialog = LayerSelectionDialog(vector_layers, raster_layers, self.iface.mainWindow())
         if dialog.exec_() == QDialog.Accepted:
-            vector_layer, raster_layer, new_layer_name, perc_val = dialog.get_selected_values()
+            vector_layer, raster_layer, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
 
             if not new_layer_name:
                 QMessageBox.warning(self.iface.mainWindow(), "HighGround", "Layer name cannot be empty.")
                 return
 
-            proc(raster_layer, vector_layer, new_layer_name, perc_val)
+            proc(raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
             QgsMessageLog.logMessage('Done', 'HighGround')

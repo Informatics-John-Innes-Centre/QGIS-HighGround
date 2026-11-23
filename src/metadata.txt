@@ -1,11 +1,11 @@
 [general]
 name=HighGround
-email=rob.ellis@jic.ac.uk
+email=rob.ellis3@jic.ac.uk
 author=Rob Ellis
-qgisMinimumVersion=3.0
+qgisMinimumVersion=3.40
 description=A QGIS plugin to calculate percentiles in DEMs
 about=A plugin for calculating percentiles in DEMs, useful for estimating heights.
-version=1.3
+version=1.4
 tracker=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround/issues
 repository=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround
 

@@ -2,14 +2,24 @@ import os
 
 import numpy as np
 import processing
-from PyQt5.QtGui import QIcon
 from osgeo import gdal
-from qgis.PyQt.QtCore import QVariant
-from qgis.PyQt.QtWidgets import QAction, QMessageBox, QComboBox, QLineEdit
+from qgis.PyQt.QtGui import QIcon
+try:
+    from qgis.PyQt.QtGui import QAction
+except ImportError:
+    from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QMessageBox, QComboBox, QLineEdit
 from qgis.PyQt.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QSpinBox, QPushButton
 from qgis.core import QgsProject, QgsMapLayer, QgsTask, QgsMessageLog
 from qgis.core import (QgsVectorLayer, QgsFeature, QgsField,
                        QgsCoordinateTransform, QgsVectorFileWriter, QgsGeometry)
+
+try:
+    from qgis.PyQt.QtCore import QVariant
+    DOUBLE_FIELD_TYPE = QVariant.Double
+except (ImportError, AttributeError):
+    from qgis.PyQt.QtCore import QMetaType
+    DOUBLE_FIELD_TYPE = QMetaType.Type.Double
 
 
 class LayerSelectionDialog(QDialog):
@@ -100,8 +110,8 @@ def proc(raster, vector, output, selected_percentile, low_percentile):
 
         # Add fields (original + new)
         new_fields = vector_layer.fields().toList() + [
-            QgsField(f"pct_{selected_percentile}", QVariant.Double),
-            QgsField(f"pct_{low_percentile}", QVariant.Double)
+            QgsField(f"pct_{selected_percentile}", DOUBLE_FIELD_TYPE),
+            QgsField(f"pct_{low_percentile}", DOUBLE_FIELD_TYPE)
         ]
         output_data.addAttributes(new_fields)
         output_layer.updateFields()
@@ -172,12 +182,20 @@ def proc(raster, vector, output, selected_percentile, low_percentile):
         save_options.driverName = "ESRI Shapefile"
         save_options.fileEncoding = "UTF-8"
 
-        writer = QgsVectorFileWriter.writeAsVectorFormatV2(
-            output_layer,
-            output,
-            transform_context,
-            save_options
-        )
+        if hasattr(QgsVectorFileWriter, "writeAsVectorFormatV3"):
+            writer = QgsVectorFileWriter.writeAsVectorFormatV3(
+                output_layer,
+                output,
+                transform_context,
+                save_options
+            )
+        else:
+            writer = QgsVectorFileWriter.writeAsVectorFormatV2(
+                output_layer,
+                output,
+                transform_context,
+                save_options
+            )
 
         if writer[0] == QgsVectorFileWriter.NoError:
             # Load the result and zoom to it
@@ -186,7 +204,9 @@ def proc(raster, vector, output, selected_percentile, low_percentile):
             result_layer.triggerRepaint()
             QgsMessageLog.logMessage(f"Success! Layer loaded at: {output}", 'HighGround')
         else:
-            QgsMessageLog.logMessage("Failed to save output file!", 'HighGround')
+            QgsMessageLog.logMessage(
+                f"Failed to save output file: {writer[1]}", 'HighGround'
+            )
 
     except Exception as e:
         QgsMessageLog.logMessage(f"Error: {str(e)}", 'HighGround')
@@ -224,7 +244,16 @@ class HighGround:
             return
 
         dialog = LayerSelectionDialog(vector_layers, raster_layers, self.iface.mainWindow())
-        if dialog.exec_() == QDialog.Accepted:
+        if hasattr(dialog, "exec"):
+            dialog_result = dialog.exec()
+        else:
+            dialog_result = dialog.exec_()
+
+        accepted = getattr(QDialog, "Accepted", None)
+        if accepted is None:
+            accepted = QDialog.DialogCode.Accepted
+
+        if dialog_result == accepted:
             vector_layer, raster_layer, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
 
             if not new_layer_name:

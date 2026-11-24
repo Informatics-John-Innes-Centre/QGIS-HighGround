@@ -5,7 +5,7 @@ author=Rob Ellis
 qgisMinimumVersion=3.40
 description=A QGIS plugin to calculate percentiles in DEMs
 about=A plugin for calculating percentiles in DEMs, useful for estimating heights.
-version=1.4
+version=1.5
 tracker=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround/issues
 repository=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround
 

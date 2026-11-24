@@ -22,6 +22,215 @@ except (ImportError, AttributeError):
     DOUBLE_FIELD_TYPE = QMetaType.Type.Double
 
 
+from qgis.core import (
+    QgsApplication, QgsTask, QgsMessageLog, Qgis
+    )
+
+MESSAGE_CATEGORY = 'HighGroundProcessing'
+
+
+class ProcTask(QgsTask):
+
+    def __init__(self, description, raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val):
+        super().__init__(description, QgsTask.CanCancel)
+        self.raster_layer = raster_layer
+        self.vector_layer = vector_layer
+        self.new_layer_name = new_layer_name
+        self.perc_val = perc_val
+        self.low_perc_val = low_perc_val
+        self.total = 0
+        self.iterations = 0
+        self.duration = 10  # You can set this to an appropriate value if needed
+        self.exception = None
+
+    def run(self):
+        """Here you implement your heavy lifting.
+        Should periodically test for isCanceled() to gracefully
+        abort.
+        This method MUST return True or False.
+        Raising exceptions will crash QGIS, so we handle them
+        internally and raise them in self.finished
+        """
+        QgsMessageLog.logMessage('Started task "{}"'.format(
+                                     self.description()),
+                                 MESSAGE_CATEGORY, Qgis.Info)
+
+
+        QgsMessageLog.logMessage("Begin processing", 'HighGround')
+
+        try:
+            raster_layer = get_layer(self.raster_layer)
+            vector_layer = get_layer(self.vector_layer)
+            original_crs = vector_layer.crs()
+
+            # Create output layer with proper CRS
+            output_layer = QgsVectorLayer(f"Polygon?crs={original_crs.authid()}", "temp_results", "memory")
+            output_data = output_layer.dataProvider()
+
+            # Add fields (original + new)
+            new_fields = vector_layer.fields().toList() + [
+                QgsField(f"pct_{self.perc_val}", DOUBLE_FIELD_TYPE),
+                QgsField(f"pct_{self.low_perc_val}", DOUBLE_FIELD_TYPE)
+            ]
+            output_data.addAttributes(new_fields)
+            output_layer.updateFields()
+
+            # CRS transformation setup
+            raster_crs = raster_layer.crs()
+            transform_context = QgsProject.instance().transformContext()
+
+            # Processing loop
+            for idx, feature in enumerate(vector_layer.getFeatures()):
+                original_geom = feature.geometry()
+                attributes = feature.attributes()
+
+                self.setProgress(int((idx + 1) / vector_layer.featureCount() * 100))
+
+                # check isCanceled() to handle cancellation
+                if self.isCanceled():
+                    return False
+
+                # Create transformed geometry for raster processing
+                processing_geom = QgsGeometry(original_geom)
+                if original_crs != raster_crs:
+                    xform = QgsCoordinateTransform(original_crs, raster_crs, transform_context)
+                    processing_geom.transform(xform)
+
+                # Create temporary layer for clipping
+                temp_vector = QgsVectorLayer(f"Polygon?crs={raster_crs.authid()}", "temp", "memory")
+                temp_data = temp_vector.dataProvider()
+                temp_feature = QgsFeature()
+                temp_feature.setGeometry(processing_geom)
+                temp_data.addFeatures([temp_feature])
+                temp_vector.updateExtents()
+
+                percentile = None
+                low_pct = None
+                try:
+                    # Clip raster
+                    params = {
+                        'INPUT': raster_layer,
+                        'MASK': temp_vector,
+                        'CROP_TO_CUTLINE': True,
+                        'KEEP_RESOLUTION': True,
+                        'NODATA': None,
+                        'OUTPUT': 'TEMPORARY_OUTPUT'
+                    }
+                    clipped = processing.run("gdal:cliprasterbymasklayer", params)['OUTPUT']
+
+                    # Calculate percentiles
+                    ds = gdal.Open(clipped)
+                    band = ds.GetRasterBand(1)
+                    data = band.ReadAsArray()
+                    if data is not None:
+                        data_flat = data.flatten()
+                        nodata = band.GetNoDataValue()
+                        if nodata is not None:
+                            data_flat = data_flat[data_flat != nodata]
+                        if data_flat.size > 0:
+                            percentile = np.percentile(data_flat, self.perc_val)
+                            low_pct = np.percentile(data_flat, self.low_perc_val)
+
+                except Exception as e:
+                    QgsMessageLog.logMessage(f"Error processing feature {idx}: {str(e)}", 'HighGround')
+
+                # Create output feature with ORIGINAL geometry
+                new_feature = QgsFeature(output_layer.fields())
+                new_feature.setGeometry(original_geom)  # Use original untransformed geometry
+                new_feature.setAttributes(attributes + [float(percentile), float(low_pct)])
+                output_data.addFeature(new_feature)
+
+                QgsMessageLog.logMessage(f"Processed {idx + 1}/{vector_layer.featureCount()}", 'HighGround')
+
+            # Save to shapefile
+            save_options = QgsVectorFileWriter.SaveVectorOptions()
+            save_options.driverName = "ESRI Shapefile"
+            save_options.fileEncoding = "UTF-8"
+
+            if hasattr(QgsVectorFileWriter, "writeAsVectorFormatV3"):
+                writer = QgsVectorFileWriter.writeAsVectorFormatV3(
+                    output_layer,
+                    self.new_layer_name,
+                    transform_context,
+                    save_options
+                )
+            else:
+                writer = QgsVectorFileWriter.writeAsVectorFormatV2(
+                    output_layer,
+                    self.new_layer_name,
+                    transform_context,
+                    save_options
+                )
+
+            if writer[0] == QgsVectorFileWriter.NoError:
+                # Load the result and zoom to it
+                result_layer = QgsVectorLayer(self.new_layer_name, "Percentile Results", "ogr")
+                QgsProject.instance().addMapLayer(result_layer)
+                result_layer.triggerRepaint()
+                QgsMessageLog.logMessage(f"Success! Layer loaded at: {self.new_layer_name}", 'HighGround')
+            else:
+                QgsMessageLog.logMessage(
+                    f"Failed to save output file: {writer[1]}", 'HighGround'
+                )
+
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Error: {str(e)}", 'HighGround')
+            # DO NOT raise Exception('bad value!')
+            # this would crash QGIS
+            # self.exception = Exception('bad value!')
+            # return False
+            self.exception = e
+            return False
+
+
+        QgsMessageLog.logMessage('Completed task "{}"'.format(
+                                             self.description()),
+                                         MESSAGE_CATEGORY, Qgis.Info)
+        return True
+
+    def finished(self, result):
+        """
+        This function is automatically called when the task has
+        completed (successfully or not).
+        You implement finished() to do whatever follow-up stuff
+        should happen after the task is complete.
+        finished is always called from the main thread, so it's safe
+        to do GUI operations and raise Python exceptions here.
+        result is the return value from self.run.
+        """
+        if result:
+            QgsMessageLog.logMessage(
+                'RandomTask "{name}" completed\n' \
+                'RandomTotal: {total} (with {iterations} '\
+              'iterations)'.format(
+                  name=self.description(),
+                  total=self.total,
+                  iterations=self.iterations),
+              MESSAGE_CATEGORY, Qgis.Success)
+        else:
+            if self.exception is None:
+                QgsMessageLog.logMessage(
+                    'RandomTask "{name}" not successful but without '\
+                    'exception (probably the task was manually '\
+                    'canceled by the user)'.format(
+                        name=self.description()),
+                    MESSAGE_CATEGORY, Qgis.Warning)
+            else:
+                QgsMessageLog.logMessage(
+                    'RandomTask "{name}" Exception: {exception}'.format(
+                        name=self.description(),
+                        exception=self.exception),
+                    MESSAGE_CATEGORY, Qgis.Critical)
+                raise self.exception
+
+    def cancel(self):
+        QgsMessageLog.logMessage(
+            'RandomTask "{name}" was canceled'.format(
+                name=self.description()),
+            MESSAGE_CATEGORY, Qgis.Info)
+        super().cancel()
+
+
 class LayerSelectionDialog(QDialog):
 
     def __init__(self, vector_layers, raster_layers, parent=None):
@@ -96,121 +305,6 @@ def get_layer(name):
     return layers[0]
 
 
-def proc(raster, vector, output, selected_percentile, low_percentile):
-    QgsMessageLog.logMessage("Begin processing", 'HighGround')
-
-    try:
-        raster_layer = get_layer(raster)
-        vector_layer = get_layer(vector)
-        original_crs = vector_layer.crs()
-
-        # Create output layer with proper CRS
-        output_layer = QgsVectorLayer(f"Polygon?crs={original_crs.authid()}", "temp_results", "memory")
-        output_data = output_layer.dataProvider()
-
-        # Add fields (original + new)
-        new_fields = vector_layer.fields().toList() + [
-            QgsField(f"pct_{selected_percentile}", DOUBLE_FIELD_TYPE),
-            QgsField(f"pct_{low_percentile}", DOUBLE_FIELD_TYPE)
-        ]
-        output_data.addAttributes(new_fields)
-        output_layer.updateFields()
-
-        # CRS transformation setup
-        raster_crs = raster_layer.crs()
-        transform_context = QgsProject.instance().transformContext()
-
-        # Processing loop
-        for idx, feature in enumerate(vector_layer.getFeatures()):
-            original_geom = feature.geometry()
-            attributes = feature.attributes()
-
-            # Create transformed geometry for raster processing
-            processing_geom = QgsGeometry(original_geom)
-            if original_crs != raster_crs:
-                xform = QgsCoordinateTransform(original_crs, raster_crs, transform_context)
-                processing_geom.transform(xform)
-
-            # Create temporary layer for clipping
-            temp_vector = QgsVectorLayer(f"Polygon?crs={raster_crs.authid()}", "temp", "memory")
-            temp_data = temp_vector.dataProvider()
-            temp_feature = QgsFeature()
-            temp_feature.setGeometry(processing_geom)
-            temp_data.addFeatures([temp_feature])
-            temp_vector.updateExtents()
-
-            percentile = None
-            low_pct = None
-            try:
-                # Clip raster
-                params = {
-                    'INPUT': raster_layer,
-                    'MASK': temp_vector,
-                    'CROP_TO_CUTLINE': True,
-                    'KEEP_RESOLUTION': True,
-                    'NODATA': None,
-                    'OUTPUT': 'TEMPORARY_OUTPUT'
-                }
-                clipped = processing.run("gdal:cliprasterbymasklayer", params)['OUTPUT']
-
-                # Calculate percentiles
-                ds = gdal.Open(clipped)
-                band = ds.GetRasterBand(1)
-                data = band.ReadAsArray()
-                if data is not None:
-                    data_flat = data.flatten()
-                    nodata = band.GetNoDataValue()
-                    if nodata is not None:
-                        data_flat = data_flat[data_flat != nodata]
-                    if data_flat.size > 0:
-                        percentile = np.percentile(data_flat, selected_percentile)
-                        low_pct = np.percentile(data_flat, low_percentile)
-
-            except Exception as e:
-                QgsMessageLog.logMessage(f"Error processing feature {idx}: {str(e)}", 'HighGround')
-
-            # Create output feature with ORIGINAL geometry
-            new_feature = QgsFeature(output_layer.fields())
-            new_feature.setGeometry(original_geom)  # Use original untransformed geometry
-            new_feature.setAttributes(attributes + [float(percentile), float(low_pct)])
-            output_data.addFeature(new_feature)
-
-            QgsMessageLog.logMessage(f"Processed {idx + 1}/{vector_layer.featureCount()}", 'HighGround')
-
-        # Save to shapefile
-        save_options = QgsVectorFileWriter.SaveVectorOptions()
-        save_options.driverName = "ESRI Shapefile"
-        save_options.fileEncoding = "UTF-8"
-
-        if hasattr(QgsVectorFileWriter, "writeAsVectorFormatV3"):
-            writer = QgsVectorFileWriter.writeAsVectorFormatV3(
-                output_layer,
-                output,
-                transform_context,
-                save_options
-            )
-        else:
-            writer = QgsVectorFileWriter.writeAsVectorFormatV2(
-                output_layer,
-                output,
-                transform_context,
-                save_options
-            )
-
-        if writer[0] == QgsVectorFileWriter.NoError:
-            # Load the result and zoom to it
-            result_layer = QgsVectorLayer(output, "Percentile Results", "ogr")
-            QgsProject.instance().addMapLayer(result_layer)
-            result_layer.triggerRepaint()
-            QgsMessageLog.logMessage(f"Success! Layer loaded at: {output}", 'HighGround')
-        else:
-            QgsMessageLog.logMessage(
-                f"Failed to save output file: {writer[1]}", 'HighGround'
-            )
-
-    except Exception as e:
-        QgsMessageLog.logMessage(f"Error: {str(e)}", 'HighGround')
-
 
 class HighGround:
     def __init__(self, iface):
@@ -260,5 +354,8 @@ class HighGround:
                 QMessageBox.warning(self.iface.mainWindow(), "HighGround", "Layer name cannot be empty.")
                 return
 
-            proc(raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
+            tasky = ProcTask('HighGround Processing', raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
+            QgsApplication.taskManager().addTask(tasky)
+  
+
             QgsMessageLog.logMessage('Done', 'HighGround')

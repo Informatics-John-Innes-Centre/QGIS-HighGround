@@ -28,8 +28,9 @@ MESSAGE_CATEGORY = 'HighGround'
 
 class ProcTask(QgsTask):
 
-    def __init__(self, description, raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val):
+    def __init__(self, description, raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val, transform_context):
         super().__init__(description, QgsTask.CanCancel)
+        self.transform_context = transform_context
         self.raster_layer = raster_layer
         self.vector_layer = vector_layer
         self.new_layer_name = new_layer_name
@@ -46,8 +47,8 @@ class ProcTask(QgsTask):
         )
 
         try:
-            raster_layer = get_layer(self.raster_layer)
-            vector_layer = get_layer(self.vector_layer)
+            raster_layer = self.raster_layer
+            vector_layer = self.vector_layer
             original_crs = vector_layer.crs()
 
             output_layer = QgsVectorLayer(f"Polygon?crs={original_crs.authid()}", "temp_results", "memory")
@@ -61,7 +62,7 @@ class ProcTask(QgsTask):
             output_layer.updateFields()
 
             raster_crs = raster_layer.crs()
-            transform_context = QgsProject.instance().transformContext()
+            transform_context = self.transform_context
 
             features_without_data = 0
             for idx, feature in enumerate(vector_layer.getFeatures()):
@@ -217,13 +218,15 @@ class LayerSelectionDialog(QDialog):
         self.dem_label = QLabel('Select DEM (Raster Layer):')
         self.layout.addWidget(self.dem_label)
         self.raster_combo = QComboBox()
-        self.raster_combo.addItems(raster_layers)
+        for name, layer_id in raster_layers:
+            self.raster_combo.addItem(name, layer_id)
         self.layout.addWidget(self.raster_combo)
 
         self.vector_label = QLabel('Select Shapefile (Vector Layer):')
         self.layout.addWidget(self.vector_label)
         self.vector_combo = QComboBox()
-        self.vector_combo.addItems(vector_layers)
+        for name, layer_id in vector_layers:
+            self.vector_combo.addItem(name, layer_id)
         self.layout.addWidget(self.vector_combo)
 
         self.percentile_label = QLabel('Select high percentile:')
@@ -283,20 +286,19 @@ class LayerSelectionDialog(QDialog):
 
     def get_selected_values(self):
         return (
-            self.vector_combo.currentText(),
-            self.raster_combo.currentText(),
+            self.vector_combo.currentData(),
+            self.raster_combo.currentData(),
             self.output_file.text().strip(),
             self.percentile_selection.value(),
             self.low_percentile_selection.value()
         )
 
 
-def get_layer(name):
-    layers = QgsProject.instance().mapLayersByName(name)
-    if not layers:
-        raise ValueError(f"Layer '{name}' not found!")
-    return layers[0]
-
+def get_layer(layer_id):
+    layer = QgsProject.instance().mapLayer(layer_id)
+    if layer is None:
+        raise ValueError("The selected layer is no longer in the project.")
+    return layer
 
 
 class HighGround:
@@ -321,8 +323,8 @@ class HighGround:
     def select_layers(self):
         layers = QgsProject.instance().mapLayers().values()
 
-        vector_layers = [layer.name() for layer in layers if layer.type() == QgsMapLayer.VectorLayer]
-        raster_layers = [layer.name() for layer in layers if layer.type() == QgsMapLayer.RasterLayer]
+        vector_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == QgsMapLayer.VectorLayer]
+        raster_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == QgsMapLayer.RasterLayer]
 
         if not vector_layers:
             QMessageBox.warning(self.iface.mainWindow(), "HighGround", "No vector layers loaded.")
@@ -342,9 +344,16 @@ class HighGround:
             accepted = QDialog.DialogCode.Accepted
 
         if dialog_result == accepted:
-            vector_layer, raster_layer, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
+            vector_id, raster_id, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
+            try:
+                vector_layer = get_layer(vector_id)
+                raster_layer = get_layer(raster_id)
+            except ValueError as e:
+                QMessageBox.critical(self.iface.mainWindow(), 'HighGround', str(e))
+                return
 
-            tasky = ProcTask('HighGround Processing', raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
+            tasky = ProcTask('HighGround Processing', raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val,
+                            QgsProject.instance().transformContext())
             task_id = id(tasky)
             self.active_tasks[task_id] = tasky
             release_task = lambda: self.active_tasks.pop(task_id, None)

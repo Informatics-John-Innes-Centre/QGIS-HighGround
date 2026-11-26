@@ -96,17 +96,28 @@ class ProcTask(QgsTask):
                     xform = QgsCoordinateTransform(original_crs, raster_crs, transform_context)
                     processing_geom.transform(xform)
 
-                # Create temporary layer for clipping
-                temp_vector = QgsVectorLayer(f"Polygon?crs={raster_crs.authid()}", "temp", "memory")
-                temp_data = temp_vector.dataProvider()
-                temp_feature = QgsFeature()
-                temp_feature.setGeometry(processing_geom)
-                temp_data.addFeatures([temp_feature])
-                temp_vector.updateExtents()
-
                 percentile = None
                 low_pct = None
-                try:
+
+                raster_extent = raster_layer.extent()
+                geometry_extent = processing_geom.boundingBox()
+                overlaps_raster = (
+                    not processing_geom.isEmpty()
+                    and geometry_extent.xMaximum() > raster_extent.xMinimum()
+                    and geometry_extent.xMinimum() < raster_extent.xMaximum()
+                    and geometry_extent.yMaximum() > raster_extent.yMinimum()
+                    and geometry_extent.yMinimum() < raster_extent.yMaximum()
+                )
+
+                if overlaps_raster:
+                    # Create temporary layer for clipping
+                    temp_vector = QgsVectorLayer(f"Polygon?crs={raster_crs.authid()}", "temp", "memory")
+                    temp_data = temp_vector.dataProvider()
+                    temp_feature = QgsFeature()
+                    temp_feature.setGeometry(processing_geom)
+                    temp_data.addFeatures([temp_feature])
+                    temp_vector.updateExtents()
+
                     # Clip raster
                     params = {
                         'INPUT': raster_layer,
@@ -120,24 +131,32 @@ class ProcTask(QgsTask):
 
                     # Calculate percentiles
                     ds = gdal.Open(clipped)
+                    if ds is None:
+                        raise RuntimeError(f"Could not open clipped raster for feature {idx}")
                     band = ds.GetRasterBand(1)
                     data = band.ReadAsArray()
                     if data is not None:
-                        data_flat = data.flatten()
+                        data_flat = data.reshape(-1)
+                        data_flat = data_flat[np.isfinite(data_flat)]
                         nodata = band.GetNoDataValue()
                         if nodata is not None:
                             data_flat = data_flat[data_flat != nodata]
                         if data_flat.size > 0:
-                            percentile = np.percentile(data_flat, self.perc_val)
-                            low_pct = np.percentile(data_flat, self.low_perc_val)
+                            percentile = float(np.percentile(data_flat, self.perc_val))
+                            low_pct = float(np.percentile(data_flat, self.low_perc_val))
+                    ds = None
 
-                except Exception as e:
-                    QgsMessageLog.logMessage(f"Error processing feature {idx}: {str(e)}", 'HighGround')
+                if percentile is None:
+                    QgsMessageLog.logMessage(
+                        f"No valid raster pixels for feature {idx}; percentile values will be NULL.",
+                        'HighGround',
+                        Qgis.Warning
+                    )
 
                 # Create output feature with ORIGINAL geometry
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(original_geom)  # Use original untransformed geometry
-                new_feature.setAttributes(attributes + [float(percentile), float(low_pct)])
+                new_feature.setAttributes(attributes + [percentile, low_pct])
                 output_data.addFeature(new_feature)
 
                 QgsMessageLog.logMessage(f"Processed {idx + 1}/{vector_layer.featureCount()}", 'HighGround')

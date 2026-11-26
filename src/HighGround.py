@@ -9,7 +9,7 @@ try:
 except ImportError:
     from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import QMessageBox, QComboBox, QLineEdit
-from qgis.PyQt.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QLabel, QSpinBox, QPushButton
+from qgis.PyQt.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QVBoxLayout, QLabel, QSpinBox, QPushButton
 from qgis.core import QgsProject, QgsMapLayer, QgsTask, QgsMessageLog
 from qgis.core import (QgsVectorLayer, QgsFeature, QgsField,
                        QgsCoordinateTransform, QgsVectorFileWriter, QgsGeometry)
@@ -236,8 +236,6 @@ class LayerSelectionDialog(QDialog):
     def __init__(self, vector_layers, raster_layers, parent=None):
         super().__init__(parent)
 
-        self.save_as = None
-
         self.setWindowTitle('Select Inputs and Parameters')
 
         self.layout = QVBoxLayout(self)
@@ -269,13 +267,15 @@ class LayerSelectionDialog(QDialog):
         self.low_percentile_selection.setRange(1, 99)
         self.layout.addWidget(self.low_percentile_selection)
 
-        self.output_label = QLabel('Choose Output Location:')
+        self.output_label = QLabel('Choose Output Shapefile:')
         self.layout.addWidget(self.output_label)
+        output_layout = QHBoxLayout()
         self.output_file = QLineEdit()
-        self.output_file.setPlaceholderText("Path to output file..")
-        self.layout.addWidget(self.output_file)
+        self.output_file.setPlaceholderText("Path to output shapefile")
+        output_layout.addWidget(self.output_file)
         self.save_as_button = QPushButton('...')
-        self.layout.addWidget(self.save_as_button)
+        output_layout.addWidget(self.save_as_button)
+        self.layout.addLayout(output_layout)
         self.save_as_button.clicked.connect(self.output_file_dialog)
 
         proc_button = QPushButton("Process")
@@ -285,8 +285,28 @@ class LayerSelectionDialog(QDialog):
         self.setLayout(self.layout)
 
     def output_file_dialog(self):
-        self.save_as, _ = QFileDialog.getSaveFileName(self, "Save File", "", "All Files(*);;Text Files(*.txt)")
-        self.output_file.setText(self.save_as)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Shapefile", self.output_file.text().strip() or "percentile_results.shp",
+            "ESRI Shapefile (*.shp)"
+        )
+        if path:
+            self.output_file.setText(path)
+
+    def accept(self):
+        path = self.output_file.text().strip()
+        if not path or os.path.basename(path) in ("", ".", ".."):
+            QMessageBox.warning(self, "HighGround", "Choose an output shapefile.")
+            return
+
+        extension = os.path.splitext(path)[1]
+        if not extension:
+            path += ".shp"
+        elif extension.lower() != ".shp":
+            QMessageBox.warning(self, "HighGround", "The output file must have a .shp extension.")
+            return
+
+        self.output_file.setText(path)
+        super().accept()
 
     def get_selected_values(self):
         return (
@@ -349,10 +369,6 @@ class HighGround:
 
         if dialog_result == accepted:
             vector_layer, raster_layer, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
-
-            if not new_layer_name:
-                QMessageBox.warning(self.iface.mainWindow(), "HighGround", "Layer name cannot be empty.")
-                return
 
             tasky = ProcTask('HighGround Processing', raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
             QgsApplication.taskManager().addTask(tasky)

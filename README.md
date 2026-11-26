@@ -23,6 +23,8 @@ about are loaded.
 Select HighGround either through the plugin menu or toolbar, a dialog box will
 then pop up. Select your raster and shape layers for analysis. Along with the 
 percentile you want calculated and an output file to save your results to.
+The output is an ESRI Shapefile: the save dialog suggests
+`percentile_results.shp`, and `.shp` is added automatically if omitted.
 
 ![](img/usage_2.png )
 

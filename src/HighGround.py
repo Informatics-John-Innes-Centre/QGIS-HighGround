@@ -278,6 +278,10 @@ class LayerSelectionDialog(QDialog):
             self.output_file.setText(path)
 
     def accept(self):
+        if self.low_percentile_selection.value() >= self.percentile_selection.value():
+            QMessageBox.warning(self, "HighGround", "The low percentile must be lower than the high percentile.")
+            return
+
         path = self.output_file.text().strip()
         if not path or os.path.basename(path) in ("", ".", ".."):
             QMessageBox.warning(self, "HighGround", "Choose an output shapefile.")

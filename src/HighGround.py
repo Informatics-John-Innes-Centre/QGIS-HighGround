@@ -181,16 +181,8 @@ class ProcTask(QgsTask):
                     save_options
                 )
 
-            if writer[0] == QgsVectorFileWriter.NoError:
-                # Load the result and zoom to it
-                result_layer = QgsVectorLayer(self.new_layer_name, "Percentile Results", "ogr")
-                QgsProject.instance().addMapLayer(result_layer)
-                result_layer.triggerRepaint()
-                QgsMessageLog.logMessage(f"Success! Layer loaded at: {self.new_layer_name}", 'HighGround')
-            else:
-                QgsMessageLog.logMessage(
-                    f"Failed to save output file: {writer[1]}", 'HighGround'
-                )
+            if writer[0] != QgsVectorFileWriter.NoError:
+                raise RuntimeError(f"Failed to save output file: {writer[1]}")
 
         except Exception as e:
             QgsMessageLog.logMessage(f"Error: {str(e)}", 'HighGround')
@@ -217,7 +209,36 @@ class ProcTask(QgsTask):
         to do GUI operations and raise Python exceptions here.
         result is the return value from self.run.
         """
+
+        QgsMessageLog.logMessage(
+            'RandomTask finished: {name}'.format(
+                name=self.description()),
+            MESSAGE_CATEGORY, Qgis.Info)
+
         if result:
+
+            QgsMessageLog.logMessage(
+                'RandomTask result: {name}'.format(
+                name=self.description()),
+                MESSAGE_CATEGORY, Qgis.Info)
+
+
+            result_layer = QgsVectorLayer(self.new_layer_name, "Percentile Results", "ogr")
+            if not result_layer.isValid():
+                error = RuntimeError(
+                    f"Output file could not be loaded as a vector layer: {self.new_layer_name}"
+                )
+                self.exception = error
+                QgsMessageLog.logMessage(str(error), 'HighGround', Qgis.Critical)
+                raise error
+
+            QgsProject.instance().addMapLayer(result_layer)
+            result_layer.triggerRepaint()
+            QgsMessageLog.logMessage(
+                f"Success! Layer loaded at: {self.new_layer_name}",
+                'HighGround',
+                Qgis.Success
+            )
             QgsMessageLog.logMessage(
                 'RandomTask "{name}" completed\n' \
                 'RandomTotal: {total} (with {iterations} '\
@@ -227,6 +248,13 @@ class ProcTask(QgsTask):
                   iterations=self.iterations),
               MESSAGE_CATEGORY, Qgis.Success)
         else:
+
+            QgsMessageLog.logMessage(
+                'RandomTask ELSE: {name}'.format(
+                name=self.description()),
+                MESSAGE_CATEGORY, Qgis.Info)
+
+
             if self.exception is None:
                 QgsMessageLog.logMessage(
                     'RandomTask "{name}" not successful but without '\
@@ -351,6 +379,7 @@ class HighGround:
         self.action = None
         self.plugin_dir = os.path.dirname(__file__)
         self.icon_path = os.path.join(self.plugin_dir, 'icon.png')
+        self.active_tasks = {}
 
     def initGui(self):
         self.action = QAction("HighGround", self.iface.mainWindow())
@@ -390,7 +419,15 @@ class HighGround:
             vector_layer, raster_layer, new_layer_name, perc_val, low_perc_val = dialog.get_selected_values()
 
             tasky = ProcTask('HighGround Processing', raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val)
-            QgsApplication.taskManager().addTask(tasky)
-  
+            task_id = id(tasky)
+            self.active_tasks[task_id] = tasky
+            release_task = lambda: self.active_tasks.pop(task_id, None)
+            tasky.taskCompleted.connect(release_task)
+            tasky.taskTerminated.connect(release_task)
+            if not QgsApplication.taskManager().addTask(tasky):
+                self.active_tasks.pop(task_id, None)
+                message = 'Could not start HighGround processing.'
+                QgsMessageLog.logMessage(message, 'HighGround', Qgis.Critical)
+                QMessageBox.critical(self.iface.mainWindow(), 'HighGround', message)
 
             QgsMessageLog.logMessage('Done', 'HighGround')

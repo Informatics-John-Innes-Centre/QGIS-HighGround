@@ -323,7 +323,6 @@ class HighGround:
         self.active_tasks = {}
 
     def initGui(self):
-        self.action = QAction("HighGround", self.iface.mainWindow())
         self.action = QAction(QIcon(self.icon_path), "HighGround", self.iface.mainWindow())
         self.action.triggered.connect(self.select_layers)
         self.iface.addToolBarIcon(self.action)

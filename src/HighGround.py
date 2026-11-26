@@ -24,6 +24,14 @@ except (ImportError, AttributeError):
     DOUBLE_FIELD_TYPE = QMetaType.Type.Double
 
 
+POLYGON_GEOMETRY = getattr(Qgis, "GeometryType", None)
+POLYGON_GEOMETRY = POLYGON_GEOMETRY.Polygon if POLYGON_GEOMETRY else 2
+
+
+def is_polygon_layer(layer):
+    return layer.type() == QgsMapLayer.VectorLayer and layer.geometryType() == POLYGON_GEOMETRY
+
+
 MESSAGE_CATEGORY = 'HighGround'
 
 class ProcTask(QgsTask):
@@ -133,7 +141,8 @@ class ProcTask(QgsTask):
                 # Preserve the source geometry; only the processing copy is transformed.
                 new_feature.setGeometry(original_geom)
                 new_feature.setAttributes(attributes + [percentile, low_pct])
-                output_data.addFeature(new_feature)
+                if not output_data.addFeature(new_feature):
+                    raise RuntimeError(f"Could not add feature {idx} to the output layer")
 
             if features_without_data:
                 QgsMessageLog.logMessage(
@@ -323,11 +332,11 @@ class HighGround:
     def select_layers(self):
         layers = QgsProject.instance().mapLayers().values()
 
-        vector_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == QgsMapLayer.VectorLayer]
+        vector_layers = [(layer.name(), layer.id()) for layer in layers if is_polygon_layer(layer)]
         raster_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == QgsMapLayer.RasterLayer]
 
         if not vector_layers:
-            QMessageBox.warning(self.iface.mainWindow(), "HighGround", "No vector layers loaded.")
+            QMessageBox.warning(self.iface.mainWindow(), "HighGround", "No polygon vector layers loaded.")
             return
         if not raster_layers:
             QMessageBox.warning(self.iface.mainWindow(), "HighGround", "No raster layers loaded.")

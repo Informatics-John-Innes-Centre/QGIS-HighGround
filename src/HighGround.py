@@ -368,7 +368,10 @@ class HighGround:
                             QgsProject.instance().transformContext())
             task_id = id(tasky)
             self.active_tasks[task_id] = tasky
-            release_task = lambda: self.active_tasks.pop(task_id, None)
+
+            def release_task():
+                return self.active_tasks.pop(task_id, None)
+
             tasky.taskCompleted.connect(release_task)
             tasky.taskTerminated.connect(release_task)
             if not QgsApplication.taskManager().addTask(tasky):

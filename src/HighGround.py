@@ -12,7 +12,7 @@ from qgis.PyQt.QtWidgets import QMessageBox, QComboBox, QLineEdit
 from qgis.PyQt.QtWidgets import QFileDialog, QDialog, QHBoxLayout, QVBoxLayout, QLabel, QSpinBox, QPushButton
 from qgis.core import (
     QgsApplication, QgsCoordinateTransform, QgsFeature, QgsField, QgsGeometry,
-    QgsMapLayer, QgsMessageLog, QgsProject, QgsTask, QgsVectorFileWriter,
+    QgsMessageLog, QgsProject, QgsTask, QgsVectorFileWriter,
     QgsVectorLayer, Qgis
 )
 
@@ -29,7 +29,7 @@ POLYGON_GEOMETRY = POLYGON_GEOMETRY.Polygon if POLYGON_GEOMETRY else 2
 
 
 def is_polygon_layer(layer):
-    return layer.type() == QgsMapLayer.VectorLayer and layer.geometryType() == POLYGON_GEOMETRY
+    return layer.type() == Qgis.LayerType.Vector and layer.geometryType() == POLYGON_GEOMETRY
 
 
 MESSAGE_CATEGORY = 'HighGround'
@@ -37,7 +37,7 @@ MESSAGE_CATEGORY = 'HighGround'
 class ProcTask(QgsTask):
 
     def __init__(self, description, raster_layer, vector_layer, new_layer_name, perc_val, low_perc_val, transform_context):
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, QgsTask.Flag.CanCancel)
         self.transform_context = transform_context
         self.raster_layer = raster_layer
         self.vector_layer = vector_layer
@@ -51,7 +51,7 @@ class ProcTask(QgsTask):
         QgsMessageLog.logMessage(
             f'Started "{self.description()}"',
             MESSAGE_CATEGORY,
-            Qgis.Info
+            Qgis.MessageLevel.Info
         )
 
         try:
@@ -149,7 +149,7 @@ class ProcTask(QgsTask):
                     f"{features_without_data} of {vector_layer.featureCount()} features had no valid raster pixels; "
                     "their percentile fields are NULL.",
                     MESSAGE_CATEGORY,
-                    Qgis.Warning
+                    Qgis.MessageLevel.Warning
                 )
 
             save_options = QgsVectorFileWriter.SaveVectorOptions()
@@ -171,7 +171,7 @@ class ProcTask(QgsTask):
                     save_options
                 )
 
-            if writer[0] != QgsVectorFileWriter.NoError:
+            if writer[0] != QgsVectorFileWriter.WriterError.NoError:
                 raise RuntimeError(f"Failed to save output file: {writer[1]}")
 
         except Exception as e:
@@ -187,13 +187,13 @@ class ProcTask(QgsTask):
                 QgsMessageLog.logMessage(
                     f'"{self.description()}" was canceled or stopped without an exception.',
                     MESSAGE_CATEGORY,
-                    Qgis.Warning
+                    Qgis.MessageLevel.Warning
                 )
             else:
                 QgsMessageLog.logMessage(
                     f'"{self.description()}" failed: {self.exception}',
                     MESSAGE_CATEGORY,
-                    Qgis.Critical
+                    Qgis.MessageLevel.Critical
                 )
                 raise self.exception
             return
@@ -204,7 +204,7 @@ class ProcTask(QgsTask):
                 f"Output file could not be loaded as a vector layer: {self.new_layer_name}"
             )
             self.exception = error
-            QgsMessageLog.logMessage(str(error), MESSAGE_CATEGORY, Qgis.Critical)
+            QgsMessageLog.logMessage(str(error), MESSAGE_CATEGORY, Qgis.MessageLevel.Critical)
             raise error
 
         QgsProject.instance().addMapLayer(result_layer)
@@ -212,7 +212,7 @@ class ProcTask(QgsTask):
         QgsMessageLog.logMessage(
             f'"{self.description()}" completed and loaded {self.new_layer_name}.',
             MESSAGE_CATEGORY,
-            Qgis.Success
+            Qgis.MessageLevel.Success
         )
 
 class LayerSelectionDialog(QDialog):
@@ -336,7 +336,7 @@ class HighGround:
         layers = QgsProject.instance().mapLayers().values()
 
         vector_layers = [(layer.name(), layer.id()) for layer in layers if is_polygon_layer(layer)]
-        raster_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == QgsMapLayer.RasterLayer]
+        raster_layers = [(layer.name(), layer.id()) for layer in layers if layer.type() == Qgis.LayerType.Raster]
 
         if not vector_layers:
             QMessageBox.warning(self.iface.mainWindow(), "HighGround", "No polygon vector layers loaded.")
@@ -346,10 +346,7 @@ class HighGround:
             return
 
         dialog = LayerSelectionDialog(vector_layers, raster_layers, self.iface.mainWindow())
-        if hasattr(dialog, "exec"):
-            dialog_result = dialog.exec()
-        else:
-            dialog_result = dialog.exec_()
+        dialog_result = dialog.exec()
 
         accepted = getattr(QDialog, "Accepted", None)
         if accepted is None:
@@ -377,5 +374,5 @@ class HighGround:
             if not QgsApplication.taskManager().addTask(tasky):
                 self.active_tasks.pop(task_id, None)
                 message = 'Could not start HighGround processing.'
-                QgsMessageLog.logMessage(message, MESSAGE_CATEGORY, Qgis.Critical)
+                QgsMessageLog.logMessage(message, MESSAGE_CATEGORY, Qgis.MessageLevel.Critical)
                 QMessageBox.critical(self.iface.mainWindow(), 'HighGround', message)

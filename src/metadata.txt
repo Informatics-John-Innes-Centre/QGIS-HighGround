@@ -6,7 +6,7 @@ qgisMinimumVersion=3.40
 description=A QGIS plugin to calculate percentiles in DEMs
 about=A plugin for calculating percentiles in DEMs, useful for estimating heights.
 license=GPL-2
-version=1.7
+version=1.8
 tracker=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround/issues
 repository=https://github.com/Informatics-John-Innes-Centre/QGIS-HighGround
 
